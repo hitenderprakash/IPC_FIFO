@@ -69,6 +69,8 @@ int FileHandle::ReadFromPipe(int cancelIOFd, uint8_t *buf, size_t count){
     struct timeval tv;
     tv.tv_sec = 10;
     tv.tv_usec = 0;
+    int remainingDataToRead = count;
+    int totalDataRead = 0;
     int result = select(maxFd + 1, &readset, NULL, NULL, &tv);
     std::cerr<<"select result: "<<result<<"read fd "<< FD_ISSET(pipeFd, &readset)<<"cancelFd "<< FD_ISSET(cancelIOFd, &readset)<<std::endl;
     if(result == 0 ){
@@ -79,20 +81,27 @@ int FileHandle::ReadFromPipe(int cancelIOFd, uint8_t *buf, size_t count){
     }
     if(result > 0 && FD_ISSET(pipeFd, &readset)){
         FD_CLR(pipeFd, &readset);
-        result = read(pipeFd, buf, count);
-        if(result > 0){
-            return result; //data available 
-        }
-        else if(result < 0){
-            //error in read
-        }
-        else if(result == 0 ){
-            std::cerr<<"write end of pipe was closed"<<std::endl;           
+        while(remainingDataToRead > 0){
+            result = read(pipeFd, buf + totalDataRead, remainingDataToRead);
+            if(result == -1 && errno == EAGAIN){
+                continue; //complete data not yet available 
+            }
+            else if(result < 0 ){
+                return -1; //error ocurred and errno!=EAGAIN
+            }
+            else if(result == 0 ){
+                std::cerr<<"write end of pipe was closed"<<std::endl;
+                return -1;           
+            }
+            totalDataRead += result;
+            remainingDataToRead = count - totalDataRead;
+            
         }
     }
     
-    return -1;
+    return totalDataRead;
 }
+
 int FileHandle::WriteToPipe(uint8_t *buf, size_t count){
     if(!OpenPipe()){
         return -1;
@@ -101,7 +110,7 @@ int FileHandle::WriteToPipe(uint8_t *buf, size_t count){
 }
 
 std::vector<uint8_t> GetMessageLengthNativeByteOrder(uint32_t len){
-    return std::vector<uint8_t>{static_cast<uint8_t>(len<<0),static_cast<uint8_t>(len<<8),static_cast<uint8_t>(len<<16),static_cast<uint8_t>(len<<24)};
+    return std::vector<uint8_t>{static_cast<unsigned char>(static_cast<uint8_t>(len>>0) & 0xFF) ,static_cast<unsigned char>(static_cast<uint8_t>(len>>8) & 0xFF),static_cast<unsigned char>(static_cast<uint8_t>(len>>16) & 0xFF) ,static_cast<unsigned char>(static_cast<uint8_t>(len>>24) & 0xFF)};
 }
 
 uint32_t GetMessageLength(const std::vector<uint8_t>& inVec){
